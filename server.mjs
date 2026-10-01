@@ -7,7 +7,7 @@ import { initDb, getDb } from './lib/db.mjs';
 import { handleRequest } from './lib/routes.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORT = parseInt(process.env.COREAD_PORT || '3000');
+const PORT = parseInt(process.env.COREAD_PORT || process.env.PORT || '3000');
 const DB_PATH = process.env.COREAD_DB || path.join(process.cwd(), 'data', 'coread.db');
 
 // Optional comment notifier: run an arbitrary command whenever someone comments.
