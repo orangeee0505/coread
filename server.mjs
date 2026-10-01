@@ -85,6 +85,21 @@ function handleMcpJsonRpc(msg) {
 }
 
 async function handleMcpHttp(req, res) {
+  const expectedToken = process.env.COREAD_MCP_TOKEN;
+  if (!expectedToken) {
+    res.writeHead(503, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'MCP authentication is not configured' }));
+    return;
+  }
+  const authorization = req.headers.authorization || '';
+  if (authorization !== 'Bearer ' + expectedToken) {
+    res.writeHead(401, {
+      'Content-Type': 'application/json',
+      'WWW-Authenticate': 'Bearer',
+    });
+    res.end(JSON.stringify({ error: 'Unauthorized' }));
+    return;
+  }
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
