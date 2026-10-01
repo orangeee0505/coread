@@ -5,6 +5,7 @@ import { execFile } from 'child_process';
 import { fileURLToPath } from 'url';
 import { initDb, getDb } from './lib/db.mjs';
 import { handleRequest } from './lib/routes.mjs';
+import { tools as mcpTools, handleTool as handleMcpTool } from './lib/mcp-tools.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.COREAD_PORT || process.env.PORT || '3000');
@@ -47,7 +48,81 @@ const MIME = {
   '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff2': 'font/woff2',
 };
 
+const MCP_INSTRUCTIONS = 'This is a private co-reading library shared by a human reader and their AI companion. Use list_books before reading when the book ID is unknown. Read with read_book using display page numbers so AI and human pagination stays aligned. Use write tools only when the user asks for the corresponding change.';
+
+function handleMcpJsonRpc(msg) {
+  if (msg.method === 'initialize') {
+    return { jsonrpc: '2.0', id: msg.id, result: {
+      protocolVersion: msg.params?.protocolVersion || '2024-11-05',
+      capabilities: { tools: {} },
+      serverInfo: { name: 'coread', version: '0.1.0' },
+      instructions: MCP_INSTRUCTIONS,
+    }};
+  }
+  if (msg.method === 'notifications/initialized') return null;
+  if (msg.method === 'ping') return { jsonrpc: '2.0', id: msg.id, result: {} };
+  if (msg.method === 'tools/list') {
+    return { jsonrpc: '2.0', id: msg.id, result: { tools: mcpTools } };
+  }
+  if (msg.method === 'tools/call') {
+    const { name, arguments: args } = msg.params || {};
+    try {
+      const result = handleMcpTool(name, args || {});
+      return { jsonrpc: '2.0', id: msg.id, result: {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+      }};
+    } catch (e) {
+      return { jsonrpc: '2.0', id: msg.id, result: {
+        content: [{ type: 'text', text: 'Error: ' + e.message }],
+        isError: true,
+      }};
+    }
+  }
+  if (msg.id !== undefined) {
+    return { jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'Method not found' } };
+  }
+  return null;
+}
+
+async function handleMcpHttp(req, res) {
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Accept, MCP-Protocol-Version',
+    });
+    res.end();
+    return;
+  }
+  if (req.method !== 'POST') {
+    res.writeHead(405, { 'Allow': 'POST, OPTIONS' });
+    res.end('Method not allowed');
+    return;
+  }
+  let body = '';
+  for await (const chunk of req) body += chunk;
+  try {
+    const msg = JSON.parse(body);
+    const response = handleMcpJsonRpc(msg);
+    if (response) {
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(JSON.stringify(response));
+    } else {
+      res.writeHead(202, { 'Access-Control-Allow-Origin': '*' });
+      res.end();
+    }
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Invalid JSON' }));
+  }
+}
 const server = http.createServer(async (req, res) => {
+  const pathname = (() => { try { return new URL(req.url, 'http://localhost:' + PORT).pathname; } catch { return ''; } })();
+  if (pathname === '/mcp') { await handleMcpHttp(req, res); return; }
+
   const handled = await handleRequest(req, res, { port: PORT, onComment: notifyComment });
   if (handled) return;
 
